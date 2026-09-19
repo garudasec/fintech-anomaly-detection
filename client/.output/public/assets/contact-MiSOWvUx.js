@@ -1,0 +1,1 @@
+import{t as e}from"./jsx-runtime-D3jfb0Ew.js";import{n as t,t as n}from"./PublicLayout-X4NW3uhI.js";var r=e();function i(){return(0,r.jsx)(t,{children:(0,r.jsx)(n,{eyebrow:`Inquiries`,title:`Connect with our platform team.`,body:`Whether you are evaluating behavioral monitoring architectures or exploring pilot integrations, we are here to assist.`})})}export{i as component};
