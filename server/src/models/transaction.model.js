@@ -104,7 +104,7 @@ transactionSchema.pre("save", function () {
 // Helper method to format location object cleanly for API responses
 transactionSchema.methods.toCleanObject = function () {
   const obj = this.toObject();
-  
+
   // Format transactionId if fallback needed
   if (!obj.transactionId) {
     obj.transactionId = `TXN-${obj._id.toString().substring(18)}`;
@@ -115,16 +115,20 @@ transactionSchema.methods.toCleanObject = function () {
     const parts = obj.location.split(",").map((s) => s.trim());
     obj.location = {
       city: parts[0] || "Unknown",
-      country: parts[1] || "United States",
-      countryCode: parts[1] ? parts[1].substring(0, 2).toUpperCase() : "US",
+      country: parts[1] || null,
+      countryCode: null,
     };
   } else if (!obj.location || typeof obj.location !== "object") {
-    obj.location = { city: "New York", country: "United States", countryCode: "US" };
+    obj.location = {
+      city: "Unknown",
+      country: null,
+      countryCode: null,
+    };
   } else {
     obj.location = {
-      city: obj.location.city || "New York",
-      country: obj.location.country || "United States",
-      countryCode: obj.location.countryCode || "US",
+      city: obj.location.city || "Unknown",
+      country: obj.location.country || null,
+      countryCode: obj.location.countryCode || null,
     };
   }
 
