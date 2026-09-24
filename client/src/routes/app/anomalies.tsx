@@ -15,8 +15,10 @@ import {
   fmtMoney,
   fmtRelative,
   fmtScore,
+  fmtDateTime,
   ANOMALY_STATUS_LABEL,
 } from "@/lib/format";
+import { useProfile } from "@/contexts/ProfileContext";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,6 +115,7 @@ function AnomalyDetailSheet({
   open: boolean;
   onClose: () => void;
 }) {
+  const { profile } = useProfile();
   if (!anomaly) return null;
   const tx = anomaly.transaction;
 
@@ -168,7 +171,7 @@ function AnomalyDetailSheet({
                 ["Transaction ID", tx.transactionId],
                 ["User ID", tx.userId],
                 ["Detected", fmtRelative(anomaly.detectedAt)],
-                ["Transaction Time", new Date(tx.transactionTime).toUTCString()],
+                ["Transaction Time", fmtDateTime(tx.transactionTime, profile.timezone)],
                 ["Channel", tx.channel.toUpperCase()],
                 [
                   "Location",
@@ -276,6 +279,7 @@ function AnomalyDetailSheet({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 function AnomaliesPage() {
+  const { profile } = useProfile();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [severity, setSeverity] = useState<AnomalySeverity | "all">("all");

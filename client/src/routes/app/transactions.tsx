@@ -1,6 +1,6 @@
-import { useState, useDeferredValue } from "react";
+import { useState, useDeferredValue, useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   ArrowUpDown,
@@ -10,9 +10,10 @@ import {
   Search,
   SlidersHorizontal,
   X,
+  Trash2,
 } from "lucide-react";
 import { transactionsQuery, transactionQuery } from "@/data/queries";
-import { COUNTRY_OPTIONS } from "@/data/repository";
+import { COUNTRY_OPTIONS, deleteTransactions } from "@/data/repository";
 import type {
   RiskLevel,
   TransactionStatus,
@@ -26,6 +27,7 @@ import {
   RISK_LABEL,
   STATUS_LABEL,
 } from "@/lib/format";
+import { useProfile } from "@/contexts/ProfileContext";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +45,17 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 // ─── Route ───────────────────────────────────────────────────────────────────
 
@@ -125,6 +138,7 @@ function TransactionDetailSheet({
   open: boolean;
   onClose: () => void;
 }) {
+  const { profile } = useProfile();
   const { data: tx, isLoading } = useQuery(transactionQuery(txId));
 
   return (
@@ -188,7 +202,7 @@ function TransactionDetailSheet({
               <div className="space-y-2 text-xs">
                 <DetailRow label="Transaction ID" value={tx.transactionId} mono />
                 <DetailRow label="User ID" value={tx.userId} mono />
-                <DetailRow label="Time" value={fmtDateTime(tx.transactionTime)} mono />
+                <DetailRow label="Time" value={fmtDateTime(tx.transactionTime, profile.timezone)} mono />
                 <DetailRow label="Channel" value={tx.channel.toUpperCase()} mono />
                 <DetailRow label="Merchant" value={tx.merchant} />
                 <DetailRow
@@ -348,11 +362,25 @@ function SortButton({
 const PAGE_SIZE = 15;
 
 function TransactionsPage() {
+  const { profile } = useProfile();
   const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(handler);
+  }, [search]);
+
   const [status, setStatus] = useState<TransactionStatus | "all">("all");
   const [riskLevel, setRiskLevel] = useState<RiskLevel | "all" | "unscored">("all");
   const [country, setCountry] = useState<string>("all");
+  const [channel, setChannel] = useState<string>("all");
+  const [minAmount, setMinAmount] = useState<string>("");
+  const [maxAmount, setMaxAmount] = useState<string>("");
+  const [from, setFrom] = useState<string>("");
+  const [to, setTo] = useState<string>("");
+
   const [sortBy, setSortBy] = useState<"transactionTime" | "amount" | "anomalyScore">(
     "transactionTime",
   );
@@ -361,8 +389,18 @@ function TransactionsPage() {
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  const query = {
-    search: deferredSearch,
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const queryClient = useQueryClient();
+
+  // Clear selections when filters or page changes
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [search, debouncedSearch, status, riskLevel, country, channel, minAmount, maxAmount, from, to, page, sortBy, sortDir]);
+
+  const query: Parameters<typeof transactionsQuery>[0] = {
+    search: debouncedSearch,
     status,
     riskLevel,
     country,
@@ -370,6 +408,11 @@ function TransactionsPage() {
     sortDir,
     page,
     pageSize: PAGE_SIZE,
+    ...(channel !== "all" ? { channel: channel as any } : {}),
+    ...(minAmount ? { minAmount: Number(minAmount) } : {}),
+    ...(maxAmount ? { maxAmount: Number(maxAmount) } : {}),
+    ...(from ? { from: new Date(from).toISOString() } : {}),
+    ...(to ? { to: new Date(to).toISOString() } : {}),
   };
 
   const { data, isLoading } = useQuery(transactionsQuery(query));
@@ -394,11 +437,67 @@ function TransactionsPage() {
     setStatus("all");
     setRiskLevel("all");
     setCountry("all");
+    setChannel("all");
+    setMinAmount("");
+    setMaxAmount("");
+    setFrom("");
+    setTo("");
     setPage(1);
   }
 
-  const hasFilters =
-    search !== "" || status !== "all" || riskLevel !== "all" || country !== "all";
+  function handleSelectAll(checked: boolean) {
+    if (!data || !data.items) return;
+    if (checked) {
+      setSelectedIds(new Set(data.items.map((tx) => tx.transactionId)));
+    } else {
+      setSelectedIds(new Set());
+    }
+  }
+
+  function handleSelectOne(txId: string, checked: boolean) {
+    const next = new Set(selectedIds);
+    if (checked) {
+      next.add(txId);
+    } else {
+      next.delete(txId);
+    }
+    setSelectedIds(next);
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedIds.size === 0) return;
+    setIsDeleting(true);
+    try {
+      const result = await deleteTransactions(Array.from(selectedIds));
+      if (result && result.deleted) {
+        // Optional: show toast or success message here if available
+      }
+      setSelectedIds(new Set());
+      setDeleteDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["anomalies"] });
+      queryClient.invalidateQueries({ queryKey: ["overview"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
+    } catch (err: any) {
+      alert("Error deleting transactions: " + err.message);
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  const activeFiltersCount = [
+    search !== "",
+    status !== "all",
+    riskLevel !== "all",
+    country !== "all",
+    channel !== "all",
+    minAmount !== "",
+    maxAmount !== "",
+    from !== "",
+    to !== ""
+  ].filter(Boolean).length;
+
+  const hasFilters = activeFiltersCount > 0;
 
   return (
     <div className="space-y-6">
@@ -417,6 +516,35 @@ function TransactionsPage() {
             </p>
           </div>
         </div>
+
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 animate-in fade-in slide-in-from-top-2 bg-surface border border-border px-3 py-1.5 rounded-lg shadow-sm">
+            <span className="text-xs font-medium text-foreground">{selectedIds.size} selected</span>
+            <Separator orientation="vertical" className="h-4" />
+            <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-destructive hover:text-destructive hover:bg-destructive/10 gap-1.5 text-xs">
+                  <Trash2 className="size-3.5" />
+                  Delete
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete transactions?</DialogTitle>
+                </DialogHeader>
+                <p className="text-sm text-muted-foreground py-4">
+                  Are you sure you want to delete {selectedIds.size} transaction{selectedIds.size !== 1 ? 's' : ''}? This action cannot be undone.
+                </p>
+                <DialogFooter>
+                  <Button variant="ghost" onClick={() => setDeleteDialogOpen(false)} disabled={isDeleting}>Cancel</Button>
+                  <Button variant="destructive" onClick={handleDeleteSelected} disabled={isDeleting}>
+                    {isDeleting ? "Deleting..." : "Delete"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        )}
       </div>
 
       {/* Filters */}
@@ -430,8 +558,18 @@ function TransactionsPage() {
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               placeholder="Search by ID, user, merchant, city…"
-              className="h-9 bg-surface pl-8 text-xs"
+              className="h-9 bg-surface pl-8 pr-8 text-xs"
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => { setSearch(""); setPage(1); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                title="Clear search"
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
           </div>
 
           {/* Status filter */}
@@ -491,9 +629,86 @@ function TransactionsPage() {
             </Button>
           )}
 
-          <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-            <SlidersHorizontal className="size-3.5" />
-            <span className="hidden sm:inline">Filters</span>
+          <div className="ml-auto">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9 gap-1.5 text-xs text-muted-foreground bg-surface border-border">
+                  <SlidersHorizontal className="size-3.5" />
+                  <span className="hidden sm:inline">Filters {activeFiltersCount > 0 ? `(${activeFiltersCount})` : ''}</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80 p-4 space-y-4">
+                <div className="space-y-1">
+                  <h4 className="font-medium leading-none text-sm">Advanced Filters</h4>
+                  <p className="text-xs text-muted-foreground">Filter by amount, date, and channel.</p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Amount Range</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        placeholder="Min"
+                        className="h-8 text-xs"
+                        value={minAmount}
+                        onChange={(e) => { setMinAmount(e.target.value); setPage(1); }}
+                      />
+                      <span className="text-muted-foreground text-xs">-</span>
+                      <Input
+                        type="number"
+                        placeholder="Max"
+                        className="h-8 text-xs"
+                        value={maxAmount}
+                        onChange={(e) => { setMaxAmount(e.target.value); setPage(1); }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Date Range</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="date"
+                        className="h-8 text-xs flex-1"
+                        value={from}
+                        onChange={(e) => { setFrom(e.target.value); setPage(1); }}
+                      />
+                      <span className="text-muted-foreground text-xs">-</span>
+                      <Input
+                        type="date"
+                        className="h-8 text-xs flex-1"
+                        value={to}
+                        onChange={(e) => { setTo(e.target.value); setPage(1); }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Channel</Label>
+                    <Select value={channel} onValueChange={(v) => { setChannel(v); setPage(1); }}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="All Channels" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Channels</SelectItem>
+                        <SelectItem value="card">Card</SelectItem>
+                        <SelectItem value="wire">Wire</SelectItem>
+                        <SelectItem value="transfer">Transfer</SelectItem>
+                        <SelectItem value="mobile">Mobile</SelectItem>
+                        <SelectItem value="atm">ATM</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {hasFilters && (
+                  <Button variant="ghost" size="sm" className="w-full text-xs h-8 mt-2" onClick={clearFilters}>
+                    Clear all filters
+                  </Button>
+                )}
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
       </div>
@@ -504,7 +719,14 @@ function TransactionsPage() {
           <table className="w-full text-left text-xs">
             <thead className="border-b border-border/70 bg-surface/40 font-mono text-[0.68rem] uppercase tracking-wider text-muted-foreground">
               <tr>
-                <th className="px-5 py-3 sm:px-6">Transaction</th>
+                <th className="px-5 py-3 w-10">
+                  <Checkbox
+                    checked={!!(data && data.items.length > 0 && selectedIds.size === data.items.length)}
+                    onCheckedChange={(checked) => handleSelectAll(checked === true)}
+                    aria-label="Select all"
+                  />
+                </th>
+                <th className="py-3 sm:px-6">Transaction</th>
                 <th className="px-4 py-3">
                   <SortButton
                     active={sortBy === "amount"}
@@ -542,14 +764,14 @@ function TransactionsPage() {
               {isLoading || !data ? (
                 Array.from({ length: PAGE_SIZE }).map((_, i) => (
                   <tr key={i} className="animate-pulse">
-                    <td colSpan={8} className="h-12 px-6">
+                    <td colSpan={9} className="h-12 px-6">
                       <div className="h-3 w-full rounded bg-surface-raised" />
                     </td>
                   </tr>
                 ))
               ) : data.items.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-14 text-center text-muted-foreground font-sans">
+                  <td colSpan={9} className="py-14 text-center text-muted-foreground font-sans">
                     No transactions match the current filters.
                   </td>
                 </tr>
@@ -558,34 +780,40 @@ function TransactionsPage() {
                   <tr
                     key={tx.transactionId}
                     className="group cursor-pointer transition-colors duration-150 hover:bg-surface/50"
-                    onClick={() => openDetail(tx)}
                   >
-                    <td className="px-5 py-3 sm:px-6">
+                    <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedIds.has(tx.transactionId)}
+                        onCheckedChange={(checked) => handleSelectOne(tx.transactionId, checked === true)}
+                        aria-label={`Select ${tx.transactionId}`}
+                      />
+                    </td>
+                    <td className="py-3 sm:px-6" onClick={() => openDetail(tx)}>
                       <div className="font-semibold text-foreground font-sans">{tx.merchant}</div>
                       <div className="text-[0.68rem] text-muted-foreground">
                         {tx.transactionId} · {tx.userId}
                       </div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={() => openDetail(tx)}>
                       <span className="font-semibold text-foreground tabular">
                         {fmtMoney(tx.amount)}
                       </span>
                     </td>
-                    <td className="hidden px-4 py-3 md:table-cell">
+                    <td className="hidden px-4 py-3 md:table-cell" onClick={() => openDetail(tx)}>
                       <span className="inline-flex items-center gap-1 text-muted-foreground font-sans">
                         <MapPin className="size-3 text-muted-foreground/60" />
                         {tx.location.city}, {tx.location.countryCode}
                       </span>
                     </td>
-                    <td className="hidden px-4 py-3 lg:table-cell">
+                    <td className="hidden px-4 py-3 lg:table-cell" onClick={() => openDetail(tx)}>
                       <span className="text-muted-foreground uppercase text-[0.68rem]">
                         {tx.channel}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={() => openDetail(tx)}>
                       <StatusBadge status={tx.status} />
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3" onClick={() => openDetail(tx)}>
                       <div className="flex items-center gap-1.5">
                         {tx.anomalyScore != null && (
                           <span
@@ -604,11 +832,11 @@ function TransactionsPage() {
                         <span className="tabular text-foreground">{fmtScore(tx.anomalyScore)}</span>
                       </div>
                     </td>
-                    <td className="hidden px-4 py-3 sm:table-cell">
+                    <td className="hidden px-4 py-3 sm:table-cell" onClick={() => openDetail(tx)}>
                       <RiskBadge risk={tx.riskLevel} />
                     </td>
-                    <td className="px-5 py-3 text-right text-muted-foreground text-[0.72rem] font-sans sm:px-6">
-                      {fmtDate(tx.transactionTime)}
+                    <td className="px-5 py-3 text-right text-muted-foreground text-[0.72rem] font-sans sm:px-6" onClick={() => openDetail(tx)}>
+                      {fmtDateTime(tx.transactionTime, profile.timezone)}
                     </td>
                   </tr>
                 ))

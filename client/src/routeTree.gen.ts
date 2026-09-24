@@ -19,7 +19,6 @@ import { Route as AppIndexRouteImport } from './routes/app/index'
 import { Route as AppAnalyticsRouteImport } from './routes/app/analytics'
 import { Route as AppAnomaliesRouteImport } from './routes/app/anomalies'
 import { Route as AppInvestigationRouteImport } from './routes/app/investigation'
-import { Route as AppLogsRouteImport } from './routes/app/logs'
 import { Route as AppSettingsRouteImport } from './routes/app/settings'
 import { Route as AppTransactionsRouteImport } from './routes/app/transactions'
 
@@ -73,11 +72,6 @@ const AppInvestigationRoute = AppInvestigationRouteImport.update({
   path: '/investigation',
   getParentRoute: () => AppRoute,
 } as any)
-const AppLogsRoute = AppLogsRouteImport.update({
-  id: '/logs',
-  path: '/logs',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -99,7 +93,6 @@ export interface FileRoutesByFullPath {
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/anomalies': typeof AppAnomaliesRoute
   '/app/investigation': typeof AppInvestigationRoute
-  '/app/logs': typeof AppLogsRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/transactions': typeof AppTransactionsRoute
   '/app/': typeof AppIndexRoute
@@ -113,7 +106,6 @@ export interface FileRoutesByTo {
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/anomalies': typeof AppAnomaliesRoute
   '/app/investigation': typeof AppInvestigationRoute
-  '/app/logs': typeof AppLogsRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/transactions': typeof AppTransactionsRoute
   '/app': typeof AppIndexRoute
@@ -129,7 +121,6 @@ export interface FileRoutesById {
   '/app/analytics': typeof AppAnalyticsRoute
   '/app/anomalies': typeof AppAnomaliesRoute
   '/app/investigation': typeof AppInvestigationRoute
-  '/app/logs': typeof AppLogsRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/transactions': typeof AppTransactionsRoute
   '/app/': typeof AppIndexRoute
@@ -146,7 +137,6 @@ export interface FileRouteTypes {
     | '/app/analytics'
     | '/app/anomalies'
     | '/app/investigation'
-    | '/app/logs'
     | '/app/settings'
     | '/app/transactions'
     | '/app/'
@@ -160,7 +150,6 @@ export interface FileRouteTypes {
     | '/app/analytics'
     | '/app/anomalies'
     | '/app/investigation'
-    | '/app/logs'
     | '/app/settings'
     | '/app/transactions'
     | '/app'
@@ -175,7 +164,6 @@ export interface FileRouteTypes {
     | '/app/analytics'
     | '/app/anomalies'
     | '/app/investigation'
-    | '/app/logs'
     | '/app/settings'
     | '/app/transactions'
     | '/app/'
@@ -262,13 +250,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppInvestigationRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/logs': {
-      id: '/app/logs'
-      path: '/logs'
-      fullPath: '/app/logs'
-      preLoaderRoute: typeof AppLogsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/app/settings': {
       id: '/app/settings'
       path: '/settings'
@@ -290,7 +271,6 @@ interface AppRouteChildren {
   AppAnalyticsRoute: typeof AppAnalyticsRoute
   AppAnomaliesRoute: typeof AppAnomaliesRoute
   AppInvestigationRoute: typeof AppInvestigationRoute
-  AppLogsRoute: typeof AppLogsRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppTransactionsRoute: typeof AppTransactionsRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -300,7 +280,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppAnalyticsRoute: AppAnalyticsRoute,
   AppAnomaliesRoute: AppAnomaliesRoute,
   AppInvestigationRoute: AppInvestigationRoute,
-  AppLogsRoute: AppLogsRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppTransactionsRoute: AppTransactionsRoute,
   AppIndexRoute: AppIndexRoute,

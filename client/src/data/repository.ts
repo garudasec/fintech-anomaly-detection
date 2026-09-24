@@ -1,27 +1,10 @@
 /**
- * DATA ACCESS LAYER — the single swap point for the real backend.
- *
- * Today every function resolves against in-memory mock data.
- * When the Express/MongoDB API is wired up, replace the bodies with `fetch`
- * calls (e.g. `GET /api/transactions`) and keep the signatures unchanged so
- * no presentation component needs to change.
- *
- * Nothing in here talks to a network. There is no ML service yet; anomaly
- * scores and detection signals are illustrative mock values.
+ * DATA ACCESS LAYER — connected to real REST API backend.
+ * Base URL: http://localhost:5000
  */
-import { MOCK_LOGS } from "./mock/logs";
-import {
-  activitySeries,
-  amountDistribution,
-  geographicActivity,
-  hourOfDayActivity,
-  riskDistribution,
-  weeklyAnomalyRatio,
-} from "./mock/analytics";
-import { MOCK_NOW } from "./mock/seed";
-import { MOCK_ANOMALIES, MOCK_TRANSACTIONS, mockUserProfile } from "./mock/transactions";
 import type {
   Anomaly,
+  RiskDistributionItem,
   AnomalySeverity,
   AnomalyStatus,
   OverviewMetrics,
@@ -34,74 +17,242 @@ import type {
   UserProfile,
 } from "./types";
 
-/** Small artificial latency so loading states are visible and realistic. */
-const simulate = <T>(value: T, ms = 320): Promise<T> =>
-  new Promise((resolve) => setTimeout(() => resolve(value), ms));
+const BASE_URL = "http://localhost:5000";
 
-const RISK_ORDER = { low: 0, medium: 1, high: 2, critical: 3 } as const;
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const url = BASE_URL + (path.startsWith("/") ? path : "/" + path);
+  const res = await fetch(url, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+    ...init,
+  });
+
+  let body: any;
+  try {
+    body = await res.json();
+  } catch (e) {
+    if (!res.ok) {
+      throw new Error("HTTP " + res.status + ": " + res.statusText);
+    }
+    throw new Error("Failed to parse JSON response from server");
+  }
+
+  if (!res.ok) {
+    const msg = body?.message || ("HTTP " + res.status + ": " + res.statusText);
+    throw new Error(msg);
+  }
+
+  if (body && typeof body === "object" && "data" in body) {
+    return body.data as T;
+  }
+
+  return body as T;
+}
+
+function mapTransaction(raw: any): Transaction {
+  if (!raw) return raw;
+
+  let location: { city: string; country: string | null; countryCode: string | null } = {
+    city: "Unknown",
+    country: null,
+    countryCode: null,
+  };
+
+  if (raw.location && typeof raw.location === "object") {
+    location = {
+      city: raw.location.city ?? "Unknown",
+      country: raw.location.country ?? null,
+      countryCode: raw.location.countryCode ?? null,
+    };
+  } else if (typeof raw.location === "string") {
+    const parts = raw.location.split(",").map((s: string) => s.trim());
+    location = {
+      city: parts[0] || "Unknown",
+      country: parts[1] || null,
+      countryCode: null,
+    };
+  }
+
+  const signals = (raw.signals || []).map((s: any) => ({
+    kind: s.kind || "amount_dev",
+    label: s.label || s.kind || "Signal",
+    weight: typeof s.weight === "number" ? s.weight : 0.5,
+    detail: s.detail || "",
+  }));
+
+  return {
+    transactionId: raw.transactionId || raw._id || "",
+    userId: raw.userId || "",
+    amount: typeof raw.amount === "number" ? raw.amount : 0,
+    currency: raw.currency || "USD",
+    transactionTime: raw.transactionTime
+      ? new Date(raw.transactionTime).toISOString()
+      : new Date().toISOString(),
+    location,
+    status: raw.status || "completed",
+    anomalyScore: typeof raw.anomalyScore === "number" ? raw.anomalyScore : null,
+    riskLevel: raw.riskLevel || null,
+    analysisState: raw.analysisState || "unavailable",
+    channel: raw.channel || "card",
+    merchant: raw.merchant || "Unknown Merchant",
+    signals,
+    investigationNote: raw.investigationNote ?? null,
+  };
+}
+
+function mapAnomaly(raw: any): Anomaly {
+  const tx = mapTransaction(raw.transaction);
+  const primarySignal = raw.primarySignal
+    ? {
+        kind: raw.primarySignal.kind || "amount_dev",
+        label: raw.primarySignal.label || "Anomaly Signal",
+        weight: typeof raw.primarySignal.weight === "number" ? raw.primarySignal.weight : 0.5,
+        detail: raw.primarySignal.detail || "",
+      }
+    : (tx.signals[0] ?? {
+        kind: "amount_dev",
+        label: "Flagged Transaction",
+        weight: tx.anomalyScore ?? 0.5,
+        detail: "Transaction flagged for risk review",
+      });
+
+  return {
+    anomalyId: raw.anomalyId || ("ANM-" + tx.transactionId),
+    transaction: tx,
+    severity: raw.severity || "medium",
+    status: raw.status || "open",
+    primarySignal,
+    detectedAt: raw.detectedAt
+      ? new Date(raw.detectedAt).toISOString()
+      : tx.transactionTime,
+    assignee: raw.assignee ?? null,
+  };
+}
 
 export async function getTransactions(q: TransactionQuery = {}): Promise<Paginated<Transaction>> {
-  const {
-    search = "",
-    status = "all",
-    riskLevel = "all",
-    country = "all",
-    minAmount,
-    maxAmount,
-    from,
-    to,
-    sortBy = "transactionTime",
-    sortDir = "desc",
-    page = 1,
-    pageSize = 12,
-  } = q;
+  const params = new URLSearchParams();
+  if (q.search) params.append("search", q.search);
+  if (q.status && q.status !== "all") params.append("status", q.status);
+  if (q.riskLevel && q.riskLevel !== "all") params.append("riskLevel", q.riskLevel);
+  if (q.country && q.country !== "all") params.append("country", q.country);
+  if (q.channel && q.channel !== "all") params.append("channel", q.channel);
+  if (q.minAmount != null) params.append("minAmount", String(q.minAmount));
+  if (q.maxAmount != null) params.append("maxAmount", String(q.maxAmount));
+  if (q.from) params.append("from", q.from);
+  if (q.to) params.append("to", q.to);
+  if (q.sortBy) params.append("sortBy", q.sortBy);
+  if (q.sortDir) params.append("sortDir", q.sortDir);
+  if (q.page != null) params.append("page", String(q.page));
+  if (q.pageSize != null) params.append("pageSize", String(q.pageSize));
 
-  const s = search.trim().toLowerCase();
-  let rows = MOCK_TRANSACTIONS.filter((t) => {
-    if (
-      s &&
-      !`${t.transactionId} ${t.userId} ${t.merchant} ${t.location.city}`.toLowerCase().includes(s)
-    )
-      return false;
-    if (status !== "all" && t.status !== status) return false;
-    if (riskLevel === "unscored" && t.riskLevel) return false;
-    if (riskLevel !== "all" && riskLevel !== "unscored" && t.riskLevel !== riskLevel) return false;
-    if (country !== "all" && t.location.countryCode !== country) return false;
-    if (minAmount != null && t.amount < minAmount) return false;
-    if (maxAmount != null && t.amount > maxAmount) return false;
-    if (from && t.transactionTime < from) return false;
-    if (to && t.transactionTime > to) return false;
-    return true;
-  });
+  const queryStr = params.toString();
+  const rawData = await apiFetch<any>("/api/transactions" + (queryStr ? "?" + queryStr : ""));
 
-  rows = rows.sort((a, b) => {
-    let cmp = 0;
-    if (sortBy === "amount") cmp = a.amount - b.amount;
-    else if (sortBy === "anomalyScore") cmp = (a.anomalyScore ?? -1) - (b.anomalyScore ?? -1);
-    else cmp = a.transactionTime.localeCompare(b.transactionTime);
-    return sortDir === "asc" ? cmp : -cmp;
-  });
-
-  const total = rows.length;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(Math.max(1, page), pageCount);
-  const items = rows.slice((safePage - 1) * pageSize, safePage * pageSize);
-  return simulate({ items, total, page: safePage, pageSize, pageCount });
+  return {
+    items: (rawData.items || []).map(mapTransaction),
+    total: rawData.total ?? 0,
+    page: rawData.page ?? 1,
+    pageSize: rawData.pageSize ?? 12,
+    pageCount: rawData.pageCount ?? 1,
+  };
 }
 
 export async function getTransaction(id: string): Promise<Transaction | null> {
-  return simulate(MOCK_TRANSACTIONS.find((t) => t.transactionId === id) ?? null, 200);
+  try {
+    const data = await apiFetch<any>("/api/transactions/" + encodeURIComponent(id));
+    return mapTransaction(data);
+  } catch (err: any) {
+    if (err.message && (err.message.includes("404") || err.message.includes("not found"))) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+export async function createTransaction(payload: any): Promise<Transaction> {
+  const data = await apiFetch<any>("/api/transactions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return mapTransaction(data);
+}
+
+export async function bulkCreateTransactions(payload: any[]): Promise<any> {
+  return await apiFetch<any>("/api/transactions/bulk", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function analyzeTransaction(id: string): Promise<any> {
+  return await apiFetch<any>(`/api/transactions/${encodeURIComponent(id)}/analyze`, {
+    method: "POST",
+  });
+}
+
+export async function deleteTransactions(ids: string[]): Promise<any> {
+  return await apiFetch<any>("/api/transactions/bulk", {
+    method: "DELETE",
+    body: JSON.stringify({ ids }),
+  });
 }
 
 export async function getRelatedTransactions(tx: Transaction, limit = 6): Promise<Transaction[]> {
-  const related = MOCK_TRANSACTIONS.filter(
-    (t) => t.userId === tx.userId && t.transactionId !== tx.transactionId,
-  ).slice(0, limit);
-  return simulate(related, 260);
+  const id = tx.transactionId;
+  const rawList = await apiFetch<any[]>("/api/transactions/" + encodeURIComponent(id) + "/related");
+  return (rawList || []).slice(0, limit).map(mapTransaction);
 }
 
 export async function getUserProfile(userId: string): Promise<UserProfile> {
-  return simulate(mockUserProfile(userId), 200);
+  const data = await apiFetch<any>("/api/users/" + encodeURIComponent(userId) + "/profile");
+  return {
+    userId: data.userId,
+    displayName: data.displayName || data.userId,
+    accountAge: data.accountAge ?? "New user",
+    homeLocation: data.homeLocation
+      ? {
+          city: data.homeLocation.city ?? "Unknown",
+          country: data.homeLocation.country ?? null,
+          countryCode: data.homeLocation.countryCode ?? null,
+        }
+      : null,
+    averageAmount: typeof data.averageAmount === "number" ? data.averageAmount : 0,
+    typicalWindow: data.typicalWindow ?? "Variable",
+    transactionsLast30d: typeof data.transactionsLast30d === "number" ? data.transactionsLast30d : 0,
+    priorFlags: typeof data.priorFlags === "number" ? data.priorFlags : 0,
+  };
+}
+
+export interface AnalystProfile {
+  name: string;
+  email: string;
+  role: string;
+  timezone: string;
+}
+
+export async function getAnalystProfile(): Promise<AnalystProfile> {
+  const data = await apiFetch<any>("/api/analyst/profile");
+  return {
+    name: data.name || "M. Okafor",
+    email: data.email || "analyst@fintech-sentinel.local",
+    role: data.role || "Lead Risk Analyst",
+    timezone: data.timezone || "UTC",
+  };
+}
+
+export async function updateAnalystProfile(profile: Partial<AnalystProfile>): Promise<AnalystProfile> {
+  const data = await apiFetch<any>("/api/analyst/profile", {
+    method: "PATCH",
+    body: JSON.stringify(profile),
+  });
+  return {
+    name: data.name || "M. Okafor",
+    email: data.email || "analyst@fintech-sentinel.local",
+    role: data.role || "Lead Risk Analyst",
+    timezone: data.timezone || "UTC",
+  };
 }
 
 export interface AnomalyQuery {
@@ -111,118 +262,109 @@ export interface AnomalyQuery {
 }
 
 export async function getAnomalies(q: AnomalyQuery = {}): Promise<Anomaly[]> {
-  const { severity = "all", status = "all", search = "" } = q;
-  const s = search.trim().toLowerCase();
-  const order: Record<AnomalyStatus, number> = {
-    escalated: 0,
-    open: 1,
-    under_review: 2,
-    resolved: 3,
-  };
-  const sev: Record<AnomalySeverity, number> = { critical: 0, high: 1, medium: 2 };
-  const rows = MOCK_ANOMALIES.filter((a) => {
-    if (severity !== "all" && a.severity !== severity) return false;
-    if (status !== "all" && a.status !== status) return false;
-    if (
-      s &&
-      !`${a.anomalyId} ${a.transaction.transactionId} ${a.transaction.userId}`
-        .toLowerCase()
-        .includes(s)
-    )
-      return false;
-    return true;
-  }).sort((a, b) => order[a.status] - order[b.status] || sev[a.severity] - sev[b.severity]);
-  return simulate(rows);
+  const params = new URLSearchParams();
+  if (q.severity && q.severity !== "all") params.append("severity", q.severity);
+  if (q.status && q.status !== "all") params.append("status", q.status);
+  if (q.search) params.append("search", q.search);
+
+  const queryStr = params.toString();
+  const data = await apiFetch<any[]>("/api/anomalies" + (queryStr ? "?" + queryStr : ""));
+  return (data || []).map(mapAnomaly);
 }
 
 export async function getAnomalyForTransaction(transactionId: string): Promise<Anomaly | null> {
-  return simulate(
-    MOCK_ANOMALIES.find((a) => a.transaction.transactionId === transactionId) ?? null,
-    150,
-  );
+  const anomalies = await getAnomalies({ search: transactionId });
+  return anomalies.find((a) => a.transaction.transactionId === transactionId) ?? null;
 }
 
 export async function getRecentAnomalies(limit = 6): Promise<Anomaly[]> {
-  const rows = [...MOCK_ANOMALIES]
-    .filter((a) => a.status !== "resolved")
-    .sort((a, b) => (b.transaction.anomalyScore ?? 0) - (a.transaction.anomalyScore ?? 0))
-    .slice(0, limit);
-  return simulate(rows, 380);
+  const data = await apiFetch<any[]>("/api/anomalies/recent?limit=" + limit);
+  return (data || []).map(mapAnomaly);
+}
+
+export async function updateAnomalyStatus(anomalyId: string, status: AnomalyStatus, investigationNote?: string): Promise<Anomaly> {
+  const data = await apiFetch<any>("/api/anomalies/" + encodeURIComponent(anomalyId) + "/status", {
+    method: "PATCH",
+    body: JSON.stringify({ status, investigationNote }),
+  });
+  return mapAnomaly(data);
 }
 
 export async function getOverviewMetrics(): Promise<OverviewMetrics> {
-  const scored = MOCK_TRANSACTIONS.filter((t) => t.riskLevel);
-  const anomalies = MOCK_ANOMALIES.length;
-  const highRisk = scored.filter((t) => RISK_ORDER[t.riskLevel!] >= 2).length;
-  // Scale the sample up so the headline numbers read like a live stream.
-  const factor = 184;
-  return simulate(
-    {
-      totalTransactions: MOCK_TRANSACTIONS.length * factor,
-      normalTransactions: (MOCK_TRANSACTIONS.length - anomalies) * factor,
-      anomaliesDetected: anomalies * factor,
-      highRisk: highRisk * factor,
-      deltas: {
-        totalTransactions: 0.042,
-        normalTransactions: 0.038,
-        anomaliesDetected: -0.061,
-        highRisk: 0.012,
-      },
-      systemStatus: {
-        ingestion: "operational",
-        detection: "not_connected",
-        lastEventAt: new Date(MOCK_NOW - 14e3).toISOString(),
-      },
-    },
-    280,
-  );
+  const data = await apiFetch<OverviewMetrics>("/api/analytics/overview");
+  return data;
 }
 
 export async function getActivitySeries(range: TimeRange): Promise<TimePoint[]> {
-  return simulate(activitySeries(range), 340);
+  const data = await apiFetch<TimePoint[]>("/api/analytics/activity?range=" + encodeURIComponent(range));
+  return data || [];
 }
 
-export async function getRiskDistribution() {
-  return simulate(riskDistribution(), 300);
+export async function getRiskDistribution(): Promise<RiskDistributionItem[]> {
+  const data = await apiFetch<{
+    low?: number;
+    medium?: number;
+    high?: number;
+    critical?: number;
+    unscored?: number;
+  }>("/api/analytics/risk-distribution");
+
+  return [
+    { key: "low", name: "Low", value: data?.low ?? 0, color: "var(--risk-low)" },
+    { key: "medium", name: "Medium", value: data?.medium ?? 0, color: "var(--risk-medium)" },
+    { key: "high", name: "High", value: data?.high ?? 0, color: "var(--risk-high)" },
+    { key: "critical", name: "Critical", value: data?.critical ?? 0, color: "var(--risk-critical)" },
+    { key: "unscored", name: "Unscored", value: data?.unscored ?? 0, color: "var(--muted-foreground)" },
+  ];
 }
 
 export async function getAnalytics() {
-  return simulate(
-    {
-      amounts: amountDistribution(),
-      hours: hourOfDayActivity(),
-      geo: geographicActivity(),
-      weekly: weeklyAnomalyRatio(),
-      risk: riskDistribution(),
-    },
-    360,
-  );
+  const data = await apiFetch<any>("/api/analytics/summary");
+
+  const amounts = (data.amounts || []).map((a: any) => ({
+    band: a.range,
+    count: a.total,
+    anomalous: a.anomalies,
+  }));
+
+  const hours = (data.hours || []).map((h: any) => ({
+    hour: h.hour,
+    volume: h.total,
+    anomalies: h.anomalies,
+  }));
+
+  const geo = (data.geo || []).map((g: any) => ({
+    country: g.country,
+    code: g.code ?? "XX",
+    total: g.total,
+    anomalies: g.anomalies,
+  }));
+
+  const risk = data.risk || { low: 0, medium: 0, high: 0, critical: 0, unscored: 0 };
+
+  const weekly = Array.isArray(data.weekly) ? data.weekly : [];
+
+  return { amounts, hours, geo, risk, weekly };
 }
 
-export interface LogQuery {
-  severity?: SystemLog["severity"] | "all";
-  source?: string | "all";
-  search?: string;
-}
 
-export async function getLogs(q: LogQuery = {}): Promise<SystemLog[]> {
-  const { severity = "all", source = "all", search = "" } = q;
-  const s = search.trim().toLowerCase();
-  return simulate(
-    MOCK_LOGS.filter((l) => {
-      if (severity !== "all" && l.severity !== severity) return false;
-      if (source !== "all" && l.source !== source) return false;
-      if (s && !`${l.event} ${l.description} ${l.source}`.toLowerCase().includes(s)) return false;
-      return true;
-    }),
-    260,
-  );
-}
 
-export const COUNTRY_OPTIONS = Array.from(
-  new Map(MOCK_TRANSACTIONS.map((t) => [t.location.countryCode, t.location.country])).entries(),
-)
-  .map(([code, name]) => ({ code, name }))
-  .sort((a, b) => a.name.localeCompare(b.name));
+export const COUNTRY_OPTIONS = [
+  { code: "US", name: "United States" },
+  { code: "GB", name: "United Kingdom" },
+  { code: "IN", name: "India" },
+  { code: "DE", name: "Germany" },
+  { code: "FR", name: "France" },
+  { code: "JP", name: "Japan" },
+  { code: "SG", name: "Singapore" },
+  { code: "CA", name: "Canada" },
+  { code: "AU", name: "Australia" },
+];
 
-export const LOG_SOURCES = Array.from(new Set(MOCK_LOGS.map((l) => l.source))).sort();
+export const LOG_SOURCES = [
+  "Ingestion Pipeline",
+  "ML Engine",
+  "Risk Service",
+  "Database",
+  "API Gateway",
+];

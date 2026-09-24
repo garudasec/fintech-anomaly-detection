@@ -1,6 +1,6 @@
 /**
- * Domain types shared by the mock data layer and the UI.
- * These mirror the shape the REST API (`GET /api/transactions`) is expected to return.
+ * Domain types shared by the data layer and the UI.
+ * These mirror the shape the REST API (GET /api/transactions) returns.
  */
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -18,20 +18,26 @@ export type DetectionSignalKind =
   | "location_deviation"
   | "frequency_burst"
   | "new_merchant"
-  | "velocity";
+  | "velocity"
+  | "amount_dev"
+  | "large_amount"
+  | "location_new"
+  | "channel_unusual"
+  | "time_pattern"
+  | (string & {});
 
 export interface DetectionSignal {
   kind: DetectionSignalKind;
   label: string;
-  /** 0–1 contribution weight (mock). */
+  /** 0–1 contribution weight. */
   weight: number;
   detail: string;
 }
 
 export interface GeoLocation {
   city: string;
-  country: string;
-  countryCode: string;
+  country: string | null;
+  countryCode: string | null;
 }
 
 export interface Transaction {
@@ -49,6 +55,7 @@ export interface Transaction {
   channel: Channel;
   merchant: string;
   signals: DetectionSignal[];
+  investigationNote?: string | null;
 }
 
 export type AnomalySeverity = "medium" | "high" | "critical";
@@ -67,10 +74,10 @@ export interface Anomaly {
 export interface UserProfile {
   userId: string;
   displayName: string;
-  accountAge: string;
-  homeLocation: GeoLocation;
+  accountAge: string | null;
+  homeLocation: GeoLocation | null;
   averageAmount: number;
-  typicalWindow: string;
+  typicalWindow: string | null;
   transactionsLast30d: number;
   priorFlags: number;
 }
@@ -112,7 +119,7 @@ export interface OverviewMetrics {
   systemStatus: {
     ingestion: "operational" | "degraded";
     detection: "operational" | "degraded" | "not_connected";
-    lastEventAt: string;
+    lastEventAt: string | null;
   };
 }
 
@@ -121,6 +128,7 @@ export interface TransactionQuery {
   status?: TransactionStatus | "all";
   riskLevel?: RiskLevel | "all" | "unscored";
   country?: string | "all";
+  channel?: Channel | "all";
   minAmount?: number;
   maxAmount?: number;
   from?: string;
@@ -137,4 +145,12 @@ export interface Paginated<T> {
   page: number;
   pageSize: number;
   pageCount: number;
+}
+
+
+export interface RiskDistributionItem {
+  key: string;
+  name: string;
+  value: number;
+  color: string;
 }

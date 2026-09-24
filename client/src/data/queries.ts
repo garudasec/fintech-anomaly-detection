@@ -62,7 +62,6 @@ export const riskDistributionQuery = queryOptions({
 
 export const analyticsQuery = queryOptions({ queryKey: ["analytics"], queryFn: repo.getAnalytics });
 
-export const logsQuery = (q: repo.LogQuery) =>
-  queryOptions({ queryKey: ["logs", q], queryFn: () => repo.getLogs(q) });
+
 
 export { useQuery };

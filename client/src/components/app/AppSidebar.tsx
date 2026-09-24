@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   Terminal,
 } from "lucide-react";
+import { useProfile } from "@/contexts/ProfileContext";
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,6 @@ const APP_NAV_ITEMS: NavItem[] = [
   { to: "/app/anomalies", label: "Anomalies", icon: Radar, badge: "12" },
   { to: "/app/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/app/investigation", label: "Investigation", icon: ShieldAlert },
-  { to: "/app/logs", label: "System Logs", icon: Terminal },
   { to: "/app/settings", label: "Settings", icon: Settings },
 ];
 
@@ -49,6 +49,7 @@ export function AppSidebar({
   className,
 }: AppSidebarProps) {
   const location = useLocation();
+  const { profile } = useProfile();
 
   return (
     <aside
@@ -151,36 +152,7 @@ export function AppSidebar({
         </nav>
       </TooltipProvider>
 
-      {/* System Mock Indicator */}
-      {!collapsed ? (
-        <div className="mx-3 mb-3 rounded-xl border border-border/80 bg-surface/60 p-3 text-xs backdrop-blur-sm">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="flex items-center gap-1.5 font-mono text-[0.68rem] uppercase tracking-wider">
-              <Database className="size-3 text-amber" />
-              Mock Engine
-            </span>
-            <span className="inline-flex size-1.5 rounded-full bg-amber animate-pulse" />
-          </div>
-          <p className="mt-1.5 text-[0.72rem] leading-snug text-muted-foreground/90">
-            Frontend is running in simulated data mode. Real backend disconnected.
-          </p>
-        </div>
-      ) : (
-        <div className="flex justify-center mb-3">
-          <TooltipProvider delayDuration={150}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="grid size-8 place-items-center rounded-lg border border-border/80 bg-surface text-amber">
-                  <Database className="size-4" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={12}>
-                Mock Engine (Simulated Data Mode)
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      )}
+
 
       {/* Analyst Profile & Collapse Toggle */}
       <div className="border-t border-sidebar-border p-3">
@@ -193,14 +165,14 @@ export function AppSidebar({
           <div className={cn("flex items-center gap-2.5", collapsed && "justify-center")}>
             <Avatar className="size-8 border border-border-strong bg-surface-raised">
               <AvatarFallback className="bg-[oklch(0.24_0.03_282)] font-mono text-xs font-semibold text-primary-glow">
-                MO
+                {profile.name.substring(0, 2).toUpperCase()}
               </AvatarFallback>
             </Avatar>
             {!collapsed && (
               <div className="flex flex-col text-left leading-none">
-                <span className="text-xs font-medium text-foreground">M. Okafor</span>
-                <span className="mt-1 text-[0.65rem] text-muted-foreground font-mono">
-                  Lead Analyst
+                <span className="text-xs font-medium text-foreground">{profile.name}</span>
+                <span className="mt-1 text-[0.65rem] text-muted-foreground font-mono truncate max-w-[120px]">
+                  {profile.role}
                 </span>
               </div>
             )}

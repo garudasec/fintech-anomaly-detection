@@ -69,6 +69,171 @@ export const createTransaction = async (req, res) => {
 };
 
 /**
+ * @desc Bulk create financial transactions from CSV data
+ * @route POST /api/transactions/bulk
+ */
+export const bulkCreateTransactions = async (req, res) => {
+  try {
+    const transactions = req.body;
+    if (!Array.isArray(transactions)) {
+      return res.status(400).json({ success: false, message: "Expected an array of transactions" });
+    }
+
+    // Sort by transactionTime ascending to preserve historical context for ML
+    transactions.sort((a, b) => new Date(a.transactionTime) - new Date(b.transactionTime));
+
+    const validChannels = ["card", "wire", "transfer", "mobile", "atm"];
+    let imported = 0;
+    let failed = 0;
+    let analyzed = 0;
+    let flagged = 0;
+    const errors = [];
+
+    // Process sequentially to ensure historical context for ML is built up
+    for (let i = 0; i < transactions.length; i++) {
+      const tx = transactions[i];
+      const { userId, amount, currency, transactionTime, city, countryCode, channel, merchant } = tx;
+
+      // Validation
+      if (!userId || typeof userId !== "string" || !userId.trim()) {
+        failed++;
+        errors.push({ row: i + 1, error: "userId is required" });
+        continue;
+      }
+      if (amount === undefined || amount === null || isNaN(Number(amount)) || Number(amount) <= 0) {
+        failed++;
+        errors.push({ row: i + 1, error: "amount must be a positive number" });
+        continue;
+      }
+      const txTime = transactionTime ? new Date(transactionTime) : new Date();
+      if (isNaN(txTime.getTime())) {
+        failed++;
+        errors.push({ row: i + 1, error: "transactionTime must be a valid date" });
+        continue;
+      }
+      if (!city || typeof city !== "string" || !city.trim()) {
+        failed++;
+        errors.push({ row: i + 1, error: "city is required" });
+        continue;
+      }
+      if (!merchant || typeof merchant !== "string" || !merchant.trim()) {
+        failed++;
+        errors.push({ row: i + 1, error: "merchant is required" });
+        continue;
+      }
+      if (channel && !validChannels.includes(channel.toLowerCase())) {
+        failed++;
+        errors.push({ row: i + 1, error: `channel must be one of: ${validChannels.join(", ")}` });
+        continue;
+      }
+
+      // Create transaction
+      const rand = Math.floor(100000 + Math.random() * 900000);
+      const transactionId = `TXN-${rand}`;
+
+      let newTx;
+      try {
+        newTx = await Transaction.create({
+          transactionId,
+          userId: userId.trim(),
+          amount: Number(amount),
+          currency: currency || "USD",
+          transactionTime: txTime,
+          location: { city: city.trim(), countryCode: countryCode ? countryCode.trim() : null, country: null },
+          status: "completed",
+          channel: channel ? channel.toLowerCase() : "card",
+          merchant: merchant.trim(),
+          analysisState: "pending",
+          anomalyScore: null,
+          riskLevel: null,
+          signals: [],
+        });
+        imported++;
+      } catch (err) {
+        failed++;
+        errors.push({ row: i + 1, error: "Database error: " + err.message });
+        continue;
+      }
+
+      // Analyze transaction
+      try {
+        const analyzedTx = await analyzeTransaction(newTx);
+        if (analyzedTx && analyzedTx.analysisState === 'analyzed') {
+          analyzed++;
+          if (analyzedTx.riskLevel === 'high' || analyzedTx.riskLevel === 'critical') {
+            flagged++;
+          }
+        }
+      } catch (err) {
+        // ML error, but transaction was created
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total: transactions.length,
+        imported,
+        failed,
+        analyzed,
+        flagged,
+        errors
+      }
+    });
+  } catch (error) {
+    console.error("Error in bulkCreateTransactions:", error.stack || error);
+    return res.status(500).json({ success: false, message: error.message || "Internal Server Error" });
+  }
+};
+
+/**
+ * @desc Bulk delete transactions by their transactionIds
+ * @route DELETE /api/transactions/bulk
+ */
+export const bulkDeleteTransactions = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids)) {
+      return res.status(400).json({ success: false, message: "Expected an array of ids" });
+    }
+
+    const standardIds = [];
+    const fallbackSuffixes = [];
+
+    for (const id of ids) {
+      if (id.startsWith("TXN-") && id.length === 10) {
+        fallbackSuffixes.push(id.substring(4));
+      }
+      standardIds.push(id);
+    }
+
+    let filter = { transactionId: { $in: standardIds } };
+
+    if (fallbackSuffixes.length > 0) {
+      filter = {
+        $or: [
+          { transactionId: { $in: standardIds } },
+          { $expr: { $in: [{ $substr: [{ $toString: "$_id" }, 18, 6] }, fallbackSuffixes] } }
+        ]
+      };
+    }
+
+    const result = await Transaction.deleteMany(filter);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        requested: ids.length,
+        deleted: result.deletedCount
+      }
+    });
+  } catch (error) {
+    console.error("Error in bulkDeleteTransactions:", error.stack || error);
+    return res.status(500).json({ success: false, message: error.message || "Internal Server Error" });
+  }
+};
+
+/**
  * @desc Get paginated transactions with search, filter, sorting
  * @route GET /api/transactions
  */
@@ -79,6 +244,7 @@ export const getTransactions = async (req, res) => {
       status = "all",
       riskLevel = "all",
       country = "all",
+      channel,
       minAmount,
       maxAmount,
       from,
@@ -90,6 +256,11 @@ export const getTransactions = async (req, res) => {
     } = req.query;
 
     const queryFilter = {};
+
+    // Channel filter
+    if (channel && channel !== "all") {
+      queryFilter.channel = channel.toLowerCase();
+    }
 
     // Search filter
     if (search && search.trim()) {
@@ -210,6 +381,13 @@ export const getTransactionById = async (req, res) => {
       tx = await Transaction.findById(id);
     }
 
+    if (!tx && id.startsWith("TXN-") && id.length === 10) {
+      const suffix = id.substring(4);
+      tx = await Transaction.findOne({
+        $expr: { $eq: [{ $substr: [{ $toString: "$_id" }, 18, 6] }, suffix] }
+      });
+    }
+
     if (!tx) {
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
@@ -236,6 +414,12 @@ export const getRelatedTransactions = async (req, res) => {
     let targetTx = await Transaction.findOne({ transactionId: id });
     if (!targetTx && id.match(/^[0-9a-fA-F]{24}$/)) {
       targetTx = await Transaction.findById(id);
+    }
+    if (!targetTx && id.startsWith("TXN-") && id.length === 10) {
+      const suffix = id.substring(4);
+      targetTx = await Transaction.findOne({
+        $expr: { $eq: [{ $substr: [{ $toString: "$_id" }, 18, 6] }, suffix] }
+      });
     }
 
     if (!targetTx) {
@@ -273,6 +457,12 @@ export const analyzeTransactionById = async (req, res) => {
     let tx = await Transaction.findOne({ transactionId: id });
     if (!tx && id.match(/^[0-9a-fA-F]{24}$/)) {
       tx = await Transaction.findById(id);
+    }
+    if (!tx && id.startsWith("TXN-") && id.length === 10) {
+      const suffix = id.substring(4);
+      tx = await Transaction.findOne({
+        $expr: { $eq: [{ $substr: [{ $toString: "$_id" }, 18, 6] }, suffix] }
+      });
     }
 
     if (!tx) {
@@ -394,6 +584,12 @@ export const submitTransactionAnalysis = async (req, res) => {
     let tx = await Transaction.findOne({ transactionId: id });
     if (!tx && id.match(/^[0-9a-fA-F]{24}$/)) {
       tx = await Transaction.findById(id);
+    }
+    if (!tx && id.startsWith("TXN-") && id.length === 10) {
+      const suffix = id.substring(4);
+      tx = await Transaction.findOne({
+        $expr: { $eq: [{ $substr: [{ $toString: "$_id" }, 18, 6] }, suffix] }
+      });
     }
 
     if (!tx) {

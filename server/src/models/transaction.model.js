@@ -87,6 +87,11 @@ const transactionSchema = new mongoose.Schema(
       type: [signalSchema],
       default: [],
     },
+
+    investigationNote: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,

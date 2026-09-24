@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   Bell,
@@ -27,17 +27,33 @@ export const Route = createFileRoute("/app/settings")({
   component: SettingsPage,
 });
 
+
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useProfile } from "@/contexts/ProfileContext";
+
 function SettingsPage() {
   const [activeTab, setActiveTab] = useState("profile");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Profile local state
+  // Profile Context state
+  const { profile: savedProfile, setProfile: setSavedProfile } = useProfile();
+
+  // Profile local state for editing
   const [profile, setProfile] = useState({
-    name: "Alex Morgan",
-    email: "a.morgan@fintech-sentinel.io",
-    role: "Lead Risk Analyst",
-    timezone: "UTC (Coordinated Universal Time)",
+    name: savedProfile.name,
+    email: savedProfile.email,
+    role: savedProfile.role,
+    timezone: savedProfile.timezone,
   });
+
+  useEffect(() => {
+    setProfile({
+      name: savedProfile.name,
+      email: savedProfile.email,
+      role: savedProfile.role,
+      timezone: savedProfile.timezone,
+    });
+  }, [savedProfile]);
 
   // Detection thresholds state
   const [detection, setDetection] = useState({
@@ -70,6 +86,20 @@ function SettingsPage() {
   const showSaveSuccess = (sectionName: string) => {
     setToastMessage(`${sectionName} saved successfully ✓`);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const handleProfileSave = async () => {
+    try {
+      await setSavedProfile({
+        name: profile.name,
+        email: profile.email,
+        role: profile.role,
+        timezone: profile.timezone,
+      });
+      showSaveSuccess("Profile settings");
+    } catch (err: any) {
+      alert("Error saving profile: " + err.message);
+    }
   };
 
   const copyApiKey = () => {
@@ -170,19 +200,32 @@ function SettingsPage() {
                   <Label htmlFor="role" className="text-xs">
                     Assigned Role
                   </Label>
-                  <Input id="role" value={profile.role} disabled className="text-xs bg-surface/40" />
+                  <Select value={profile.role} onValueChange={(val) => setProfile({ ...profile, role: val })}>
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="Select role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Analyst">Analyst</SelectItem>
+                      <SelectItem value="Senior Risk Analyst">Senior Risk Analyst</SelectItem>
+                      <SelectItem value="Lead Risk Analyst">Lead Risk Analyst</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="tz" className="text-xs">
                     Default Timezone
                   </Label>
-                  <Input
-                    id="tz"
-                    value={profile.timezone}
-                    onChange={(e) => setProfile({ ...profile, timezone: e.target.value })}
-                    className="text-xs"
-                  />
+                  <Select value={profile.timezone} onValueChange={(val) => setProfile({ ...profile, timezone: val })}>
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="Select timezone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="UTC">UTC &mdash; Coordinated Universal Time</SelectItem>
+                      <SelectItem value="Asia/Kolkata">IST &mdash; India Standard Time</SelectItem>
+                      <SelectItem value="America/New_York">ET &mdash; Eastern Time</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </div>
@@ -190,7 +233,7 @@ function SettingsPage() {
             <div className="pt-4 flex justify-end">
               <Button
                 size="sm"
-                onClick={() => showSaveSuccess("Profile settings")}
+                onClick={handleProfileSave}
                 className="gap-2 font-mono text-xs"
               >
                 <Save className="size-3.5" />

@@ -214,7 +214,7 @@ function AnalyticsPage() {
             {isLoading || !analytics ? (
               <div className="p-8 text-center text-muted-foreground">Loading geographic data...</div>
             ) : (
-              analytics.geo.map((g) => {
+              analytics.geo.map((g: any) => {
                 const anomalyPct = g.total > 0 ? ((g.anomalies / g.total) * 100).toFixed(1) : "0.0";
                 return (
                   <div key={g.code} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">

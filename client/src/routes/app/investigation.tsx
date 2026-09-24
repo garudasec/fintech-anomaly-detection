@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -18,15 +18,18 @@ import {
   userProfileQuery,
   relatedTransactionsQuery,
 } from "@/data/queries";
+import { updateAnomalyStatus } from "@/data/repository";
 import type { Anomaly, AnomalyStatus } from "@/data/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   fmtDateTime,
   fmtMoney,
   fmtScore,
   ANOMALY_STATUS_LABEL,
 } from "@/lib/format";
+import { useProfile } from "@/contexts/ProfileContext";
 import { cn } from "@/lib/utils";
 
 interface InvestigationSearch {
@@ -46,6 +49,7 @@ export const Route = createFileRoute("/app/investigation")({
 function InvestigationPage() {
   const searchParams = Route.useSearch();
   const paramId = searchParams.id;
+  const { profile } = useProfile();
   const { data: anomalies, isLoading } = useQuery(anomaliesQuery({}));
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(paramId ?? null);
@@ -85,14 +89,25 @@ function InvestigationPage() {
     relatedTransactionsQuery(selectedAnomaly?.transaction)
   );
 
-  const handleSetDisposition = (status: AnomalyStatus, label: string) => {
+  const queryClient = useQueryClient();
+  const [analystNote, setAnalystNote] = useState("");
+
+  useEffect(() => {
+    if (selectedAnomaly) {
+      setAnalystNote(selectedAnomaly.transaction.investigationNote ?? "");
+    }
+  }, [selectedAnomaly?.anomalyId]);
+
+  const handleSetDisposition = async (status: AnomalyStatus, label: string) => {
     if (!selectedAnomaly) return;
-    setDispositions((prev) => ({
-      ...prev,
-      [selectedAnomaly.anomalyId]: { status },
-    }));
-    setToastMessage(`Case ${selectedAnomaly.anomalyId} updated to ${label}`);
-    setTimeout(() => setToastMessage(null), 3500);
+    try {
+      await updateAnomalyStatus(selectedAnomaly.anomalyId, status, analystNote);
+      setToastMessage(`Case ${selectedAnomaly.anomalyId} updated to ${label}`);
+      setTimeout(() => setToastMessage(null), 3500);
+      queryClient.invalidateQueries({ queryKey: ["anomalies"] });
+    } catch (err) {
+      alert("Failed to update status");
+    }
   };
 
   return (
@@ -160,7 +175,10 @@ function InvestigationPage() {
                   return (
                     <button
                       key={item.anomalyId}
-                      onClick={() => setSelectedId(item.anomalyId)}
+                      onClick={() => {
+                        setSelectedId(item.anomalyId);
+                        setAnalystNote(item.transaction.investigationNote ?? "");
+                      }}
                       className={cn(
                         "w-full p-3.5 text-left transition-colors duration-150 flex flex-col gap-2",
                         isSelected
@@ -235,7 +253,7 @@ function InvestigationPage() {
                       </span>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Detected at <span className="font-mono text-foreground">{fmtDateTime(selectedAnomaly.detectedAt)}</span> by rule{" "}
+                      Detected at <span className="font-mono text-foreground">{fmtDateTime(selectedAnomaly.detectedAt, profile.timezone)}</span> by rule{" "}
                       <span className="font-semibold text-foreground">{selectedAnomaly.primarySignal.label}</span>
                     </p>
                   </div>
@@ -393,6 +411,20 @@ function InvestigationPage() {
                 </div>
               </div>
 
+              {/* Investigation Notes */}
+              <div className="panel-raised p-5 sm:p-6 space-y-4">
+                <div className="flex items-center gap-2 border-b border-border/70 pb-3">
+                  <ShieldCheck className="size-4 text-lime" />
+                  <h3 className="text-sm font-semibold text-foreground">Investigation Notes</h3>
+                </div>
+                <Textarea
+                  value={analystNote}
+                  onChange={(e) => setAnalystNote(e.target.value)}
+                  placeholder="Enter analyst observations and evidence here..."
+                  className="min-h-[100px] text-xs font-mono"
+                />
+              </div>
+
               {/* User Profile & Behavioral Baseline */}
               <div className="panel-raised p-5 sm:p-6 space-y-4">
                 <div className="flex items-center justify-between border-b border-border/70 pb-3">
@@ -439,10 +471,10 @@ function InvestigationPage() {
                       </span>
                       <div className="font-semibold text-foreground flex items-center gap-1">
                         <Globe className="size-3 text-muted-foreground" />
-                        {userProfile.homeLocation.country}
+                        {userProfile.homeLocation?.country}
                       </div>
                       <div className="text-[0.68rem] text-muted-foreground">
-                        {userProfile.homeLocation.city}
+                        {userProfile.homeLocation?.city}
                       </div>
                     </div>
 
@@ -500,7 +532,7 @@ function InvestigationPage() {
                         relatedTxns.map((tx) => (
                           <tr key={tx.transactionId} className="hover:bg-surface-raised/40">
                             <td className="px-4 py-2.5 text-muted-foreground">
-                              {fmtDateTime(tx.transactionTime)}
+                              {fmtDateTime(tx.transactionTime, profile.timezone)}
                             </td>
                             <td className="px-4 py-2.5 text-foreground font-semibold">
                               {tx.transactionId}

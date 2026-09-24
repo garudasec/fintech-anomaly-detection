@@ -123,7 +123,7 @@ export const getRecentAnomalies = async (req, res) => {
 export const updateAnomalyStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, investigationNote } = req.body;
 
     const validStatuses = ["open", "under_review", "escalated", "resolved"];
     if (!status || !validStatuses.includes(status)) {
@@ -148,6 +148,10 @@ export const updateAnomalyStatus = async (req, res) => {
     else if (status === "under_review") tx.status = "under_review";
     else if (status === "escalated") tx.status = "blocked";
     else if (status === "resolved") tx.status = "completed";
+
+    if (investigationNote !== undefined) {
+      tx.investigationNote = investigationNote;
+    }
 
     await tx.save();
 

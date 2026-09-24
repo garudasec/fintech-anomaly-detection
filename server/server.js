@@ -8,6 +8,7 @@ import transactionRoutes from "./src/routes/transaction.route.js";
 import anomalyRoutes from "./src/routes/anomaly.route.js";
 import analyticsRoutes from "./src/routes/analytics.route.js";
 import userRoutes from "./src/routes/user.route.js";
+import analystRoutes from "./src/routes/analyst.route.js";
 import errorHandler from "./src/middleware/error.middleware.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -35,6 +36,7 @@ app.use("/api/transactions", transactionRoutes);
 app.use("/api/anomalies", anomalyRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/analyst", analystRoutes);
 
 // Centralized error handler
 app.use(errorHandler);
