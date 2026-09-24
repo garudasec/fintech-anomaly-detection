@@ -17,7 +17,7 @@ import type {
   UserProfile,
 } from "./types";
 
-const BASE_URL = "http://localhost:5000";
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = BASE_URL + (path.startsWith("/") ? path : "/" + path);
