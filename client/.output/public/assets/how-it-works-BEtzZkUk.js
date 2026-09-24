@@ -1,0 +1,1 @@
+import{t as e}from"./jsx-runtime-D3jfb0Ew.js";import{n as t,t as n}from"./PublicLayout-X4NW3uhI.js";var r=e();function i(){return(0,r.jsx)(t,{children:(0,r.jsx)(n,{eyebrow:`Workflow`,title:`From raw events to clear analyst decisions.`,body:`How our signal extraction and scoring pipeline observes transaction deviations without black-box opacity.`})})}export{i as component};
