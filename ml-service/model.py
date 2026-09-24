@@ -184,6 +184,10 @@ class AnomalyDetector:
         is_new_chan = feature_dict["is_new_channel"]
         hour = feature_dict["hour"]
 
+        # Extract transaction currency (defaults to USD if not specified)
+        raw_curr = transaction.get("currency")
+        currency = str(raw_curr).strip().upper() if raw_curr and str(raw_curr).strip() else "USD"
+
         # Signal 1: Deviation from historical amount pattern
         if history and user_mean > 0:
             if z_score >= 2.0 or (user_mean > 0 and amount >= 3.0 * user_mean):
@@ -192,7 +196,7 @@ class AnomalyDetector:
                     "kind": "amount_dev",
                     "label": "Historical Amount Deviation",
                     "weight": weight,
-                    "detail": f"Transaction amount (${amount:.2f}) differs significantly from user's historical average (${user_mean:.2f}).",
+                    "detail": f"Transaction amount ({currency} {amount:.2f}) differs significantly from user's historical average ({currency} {user_mean:.2f}).",
                 })
 
         # Signal 2: Unusually high transaction amount (global high value)
@@ -202,7 +206,7 @@ class AnomalyDetector:
                 "kind": "large_amount",
                 "label": "High Transaction Value",
                 "weight": weight,
-                "detail": f"Transaction amount of ${amount:.2f} exceeds high-risk value threshold.",
+                "detail": f"Transaction amount of {currency} {amount:.2f} exceeds high-risk value threshold.",
             })
 
         # Signal 3: Unseen location relative to user history

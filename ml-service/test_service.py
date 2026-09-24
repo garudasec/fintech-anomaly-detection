@@ -95,6 +95,43 @@ def test_unusual_transaction():
     print("✓ Unusual Transaction Test PASSED")
 
 
+def test_inr_currency_formatting():
+    print("\nTesting INR Currency Signal Formatting...")
+    payload = {
+        "transaction": {
+            "transactionId": "TXN-INR-001",
+            "userId": "USER-INR-101",
+            "amount": 250000.0,
+            "currency": "INR",
+            "transactionTime": "2026-09-24T03:15:00Z",
+            "location": {"city": "Mumbai", "country": "India", "countryCode": "IN"},
+            "channel": "wire",
+            "merchant": "Luxury Retailer",
+        },
+        "history": [
+            {"amount": 1000.0, "currency": "INR", "channel": "card", "location": {"city": "Mumbai", "countryCode": "IN"}},
+            {"amount": 1200.0, "currency": "INR", "channel": "card", "location": {"city": "Mumbai", "countryCode": "IN"}},
+        ],
+    }
+
+    response = client.post("/analyze", json=payload)
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    data = response.json()
+
+    print(f"INR transaction response: {data}")
+    assert len(data["signals"]) > 0, "Expected signals for high INR transaction"
+
+    for signal in data["signals"]:
+        detail = signal["detail"]
+        assert "$" not in detail, f"Found dollar sign '$' in signal detail: '{detail}'"
+        if "amount" in signal["kind"]:
+            assert "INR 250000.00" in detail, f"Expected 'INR 250000.00' in detail: '{detail}'"
+        if signal["kind"] == "amount_dev":
+            assert "INR 1100.00" in detail, f"Expected historical mean 'INR 1100.00' in detail: '{detail}'"
+
+    print("✓ INR Currency Signal Formatting Test PASSED")
+
+
 def test_secret_header_authentication():
     print("\nTesting ML Secret Header Authentication...")
     os.environ["ML_SERVICE_SECRET"] = "test-secret-123"
@@ -255,6 +292,7 @@ if __name__ == "__main__":
         test_health_endpoint()
         test_normal_transaction()
         test_unusual_transaction()
+        test_inr_currency_formatting()
         test_secret_header_authentication()
         test_invalid_requests()
         test_chronological_training_history()
