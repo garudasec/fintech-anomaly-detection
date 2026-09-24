@@ -268,11 +268,20 @@ export const getRelatedTransactions = async (req, res) => {
  */
 export const submitTransactionAnalysis = async (req, res) => {
   try {
-    // Validate secret header
-    const secret = req.headers["x-ml-secret"];
     const expectedSecret = process.env.ML_SERVICE_SECRET;
-    if (expectedSecret && secret !== expectedSecret) {
-      return res.status(401).json({ success: false, message: "Unauthorized: Invalid x-ml-secret header" });
+    if (!expectedSecret || !expectedSecret.trim()) {
+      return res.status(500).json({
+        success: false,
+        message: "Server Configuration Error: ML_SERVICE_SECRET environment variable is not configured",
+      });
+    }
+
+    const secret = req.headers["x-ml-secret"];
+    if (!secret || secret !== expectedSecret) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: Invalid or missing x-ml-secret header",
+      });
     }
 
     const { id } = req.params;

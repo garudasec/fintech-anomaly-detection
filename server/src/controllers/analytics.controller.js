@@ -1,13 +1,13 @@
 import Transaction from "../models/transaction.model.js";
 
 /**
- * @desc Get high-level overview metrics calculated from real MongoDB data
+ * @desc Get high-level overview metrics calculated strictly from real MongoDB data
  * @route GET /api/analytics/overview
  */
-export const getOverviewMetrics = async (req, res, next) => {
+export const getOverviewMetrics = async (req, res) => {
   try {
     const totalTransactions = await Transaction.countDocuments();
-    
+
     const normalTransactions = await Transaction.countDocuments({
       $or: [{ status: { $in: ["completed", "normal"] } }, { riskLevel: "low" }],
     });
@@ -24,20 +24,48 @@ export const getOverviewMetrics = async (req, res, next) => {
       $or: [{ riskLevel: { $in: ["high", "critical"] } }, { anomalyScore: { $gte: 0.72 } }],
     });
 
-    // Calculate deltas comparing recent 24h to prior 24h
+    // Calculate real deltas comparing current 24h to prior 24h period from MongoDB
     const now = new Date();
     const past24h = new Date(now.getTime() - 24 * 3600 * 1000);
     const past48h = new Date(now.getTime() - 48 * 3600 * 1000);
 
-    const [curr24, prev24] = await Promise.all([
+    const normalQuery = {
+      $or: [{ status: { $in: ["completed", "normal"] } }, { riskLevel: "low" }],
+    };
+    const anomalyQuery = {
+      $or: [
+        { anomalyScore: { $gte: 0.45 } },
+        { riskLevel: { $in: ["medium", "high", "critical"] } },
+        { status: { $in: ["flagged", "under_review", "blocked", "anomaly"] } },
+      ],
+    };
+    const highRiskQuery = {
+      $or: [{ riskLevel: { $in: ["high", "critical"] } }, { anomalyScore: { $gte: 0.72 } }],
+    };
+
+    const [
+      currTotal, prevTotal,
+      currNormal, prevNormal,
+      currAnomalies, prevAnomalies,
+      currHighRisk, prevHighRisk,
+    ] = await Promise.all([
       Transaction.countDocuments({ transactionTime: { $gte: past24h } }),
       Transaction.countDocuments({ transactionTime: { $gte: past48h, $lt: past24h } }),
+      Transaction.countDocuments({ ...normalQuery, transactionTime: { $gte: past24h } }),
+      Transaction.countDocuments({ ...normalQuery, transactionTime: { $gte: past48h, $lt: past24h } }),
+      Transaction.countDocuments({ ...anomalyQuery, transactionTime: { $gte: past24h } }),
+      Transaction.countDocuments({ ...anomalyQuery, transactionTime: { $gte: past48h, $lt: past24h } }),
+      Transaction.countDocuments({ ...highRiskQuery, transactionTime: { $gte: past24h } }),
+      Transaction.countDocuments({ ...highRiskQuery, transactionTime: { $gte: past48h, $lt: past24h } }),
     ]);
 
-    const totalDelta = prev24 > 0 ? Number(((curr24 - prev24) / prev24).toFixed(3)) : 0;
+    const calculateDelta = (curr, prev) => {
+      if (!prev || prev === 0) return 0;
+      return Number(((curr - prev) / prev).toFixed(3));
+    };
 
     const lastTx = await Transaction.findOne().sort({ transactionTime: -1 });
-    const lastEventAt = lastTx ? lastTx.transactionTime.toISOString() : new Date().toISOString();
+    const lastEventAt = lastTx ? lastTx.transactionTime.toISOString() : null;
 
     return res.status(200).json({
       success: true,
@@ -47,10 +75,10 @@ export const getOverviewMetrics = async (req, res, next) => {
         anomaliesDetected,
         highRisk,
         deltas: {
-          totalTransactions: totalDelta,
-          normalTransactions: totalDelta * 0.9,
-          anomaliesDetected: totalDelta * 1.1,
-          highRisk: totalDelta * 0.5,
+          totalTransactions: calculateDelta(currTotal, prevTotal),
+          normalTransactions: calculateDelta(currNormal, prevNormal),
+          anomaliesDetected: calculateDelta(currAnomalies, prevAnomalies),
+          highRisk: calculateDelta(currHighRisk, prevHighRisk),
         },
         systemStatus: {
           ingestion: "operational",
@@ -60,7 +88,8 @@ export const getOverviewMetrics = async (req, res, next) => {
       },
     });
   } catch (error) {
-    next(error);
+    console.error("Error in getOverviewMetrics:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -68,7 +97,7 @@ export const getOverviewMetrics = async (req, res, next) => {
  * @desc Get time-series activity data for activity charts
  * @route GET /api/analytics/activity
  */
-export const getActivitySeries = async (req, res, next) => {
+export const getActivitySeries = async (req, res) => {
   try {
     const range = req.query.range || "24h";
     const now = new Date();
@@ -132,7 +161,8 @@ export const getActivitySeries = async (req, res, next) => {
       data: timePoints,
     });
   } catch (error) {
-    next(error);
+    console.error("Error in getActivitySeries:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -140,7 +170,7 @@ export const getActivitySeries = async (req, res, next) => {
  * @desc Get count distribution by risk level
  * @route GET /api/analytics/risk-distribution
  */
-export const getRiskDistribution = async (req, res, next) => {
+export const getRiskDistribution = async (req, res) => {
   try {
     const pipeline = [
       {
@@ -178,7 +208,8 @@ export const getRiskDistribution = async (req, res, next) => {
       data: distribution,
     });
   } catch (error) {
-    next(error);
+    console.error("Error in getRiskDistribution:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -186,7 +217,7 @@ export const getRiskDistribution = async (req, res, next) => {
  * @desc Get comprehensive analytics summary
  * @route GET /api/analytics/summary
  */
-export const getAnalyticsSummary = async (req, res, next) => {
+export const getAnalyticsSummary = async (req, res) => {
   try {
     // 1. Amount buckets
     const amountPipeline = [
@@ -247,7 +278,7 @@ export const getAnalyticsSummary = async (req, res, next) => {
         $group: {
           _id: {
             country: { $ifNull: ["$location.country", "$location"] },
-            code: { $ifNull: ["$location.countryCode", "US"] },
+            code: { $ifNull: ["$location.countryCode", null] },
           },
           total: { $sum: 1 },
           anomalies: {
@@ -276,7 +307,6 @@ export const getAnalyticsSummary = async (req, res, next) => {
       Transaction.aggregate(geoPipeline),
     ]);
 
-    // Format amount buckets
     const bucketLabels = ["< $100", "$100–$500", "$500–$2k", "$2k–$10k", "> $10k"];
     const amounts = amountRes.map((b, idx) => ({
       range: bucketLabels[idx] || `$${b._id}`,
@@ -284,7 +314,6 @@ export const getAnalyticsSummary = async (req, res, next) => {
       anomalies: b.anomalies,
     }));
 
-    // Format hours
     const hoursMap = {};
     for (let h = 0; h < 24; h++) hoursMap[h] = { total: 0, anomalies: 0 };
     hourRes.forEach((h) => {
@@ -298,15 +327,13 @@ export const getAnalyticsSummary = async (req, res, next) => {
       anomalies: hoursMap[h].anomalies,
     }));
 
-    // Format geo
     const geo = geoRes.map((g) => ({
       country: typeof g._id.country === "string" ? g._id.country : "Unknown",
-      code: g._id.code || "US",
+      code: g._id.code,
       total: g.total,
       anomalies: g.anomalies,
     }));
 
-    // Format risk
     const riskCounts = await Transaction.aggregate([
       {
         $group: {
@@ -330,6 +357,7 @@ export const getAnalyticsSummary = async (req, res, next) => {
       },
     });
   } catch (error) {
-    next(error);
+    console.error("Error in getAnalyticsSummary:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };

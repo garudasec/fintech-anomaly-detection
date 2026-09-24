@@ -1,26 +1,25 @@
 import Transaction from "../models/transaction.model.js";
 
 /**
- * @desc Get user investigation profile aggregated from transaction history
+ * @desc Get user profile statistics calculated strictly from MongoDB transaction history
  * @route GET /api/users/:userId/profile
  */
-export const getUserProfile = async (req, res, next) => {
+export const getUserProfile = async (req, res) => {
   try {
     const { userId } = req.params;
 
     const userTxs = await Transaction.find({ userId }).sort({ transactionTime: -1 });
 
     if (userTxs.length === 0) {
-      // Return a default baseline profile if no transaction history exists yet
       return res.status(200).json({
         success: true,
         data: {
           userId,
-          displayName: `User ${userId}`,
-          accountAge: "1 yr 0 mo",
-          homeLocation: { city: "New York", country: "United States", countryCode: "US" },
+          displayName: userId,
+          accountAge: null,
+          homeLocation: null,
           averageAmount: 0,
-          typicalWindow: "09:00–18:00 local",
+          typicalWindow: null,
           transactionsLast30d: 0,
           priorFlags: 0,
           totalTransactions: 0,
@@ -36,6 +35,47 @@ export const getUserProfile = async (req, res, next) => {
     const totalAmount = userTxs.reduce((sum, tx) => sum + (tx.amount || 0), 0);
     const averageAmount = Math.round(totalAmount / totalTransactions);
 
+    // Calculate real account age based on earliest recorded transaction
+    const earliestTime = new Date(userTxs[userTxs.length - 1].transactionTime);
+    const now = new Date();
+    const diffMonths = (now.getFullYear() - earliestTime.getFullYear()) * 12 + (now.getMonth() - earliestTime.getMonth());
+    const yrs = Math.floor(diffMonths / 12);
+    const mos = Math.max(0, diffMonths % 12);
+    const accountAge = yrs > 0 ? `${yrs} yrs ${mos} mo` : `${mos} mo`;
+
+    // Determine most frequent transaction location
+    const locationCounts = new Map();
+    userTxs.forEach((tx) => {
+      const clean = tx.toCleanObject();
+      if (clean.location && clean.location.city) {
+        const key = JSON.stringify(clean.location);
+        locationCounts.set(key, (locationCounts.get(key) || 0) + 1);
+      }
+    });
+
+    let homeLocation = null;
+    let maxCount = 0;
+    locationCounts.forEach((count, locKey) => {
+      if (count > maxCount) {
+        maxCount = count;
+        try {
+          homeLocation = JSON.parse(locKey);
+        } catch (e) {}
+      }
+    });
+
+    // Determine typical window from user transaction hours
+    const hours = userTxs.map((tx) => new Date(tx.transactionTime).getHours());
+    const minHour = Math.min(...hours);
+    const maxHour = Math.max(...hours);
+    const typicalWindow = `${String(minHour).padStart(2, "0")}:00–${String(maxHour).padStart(2, "0")}:00 local`;
+
+    // Calculate 30-day transactions count
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
+    const transactionsLast30d = userTxs.filter(
+      (tx) => new Date(tx.transactionTime) >= thirtyDaysAgo
+    ).length;
+
     const anomalyCount = userTxs.filter(
       (tx) =>
         (tx.anomalyScore !== null && tx.anomalyScore >= 0.45) ||
@@ -47,19 +87,11 @@ export const getUserProfile = async (req, res, next) => {
       ["flagged", "under_review", "blocked"].includes(tx.status)
     ).length;
 
-    // Home location based on latest or most frequent location
-    const latestTxObj = userTxs[0].toCleanObject();
-    const homeLocation = latestTxObj.location || {
-      city: "New York",
-      country: "United States",
-      countryCode: "US",
-    };
-
     const riskDistribution = { low: 0, medium: 0, high: 0, critical: 0 };
     userTxs.forEach((tx) => {
       if (tx.riskLevel && riskDistribution.hasOwnProperty(tx.riskLevel)) {
         riskDistribution[tx.riskLevel]++;
-      } else {
+      } else if (tx.riskLevel === "low") {
         riskDistribution.low++;
       }
     });
@@ -70,12 +102,12 @@ export const getUserProfile = async (req, res, next) => {
       success: true,
       data: {
         userId,
-        displayName: `Account ${userId}`,
-        accountAge: "2 yrs 4 mo",
+        displayName: userId,
+        accountAge,
         homeLocation,
         averageAmount,
-        typicalWindow: "08:00–20:00 local",
-        transactionsLast30d: totalTransactions,
+        typicalWindow,
+        transactionsLast30d,
         priorFlags,
         totalTransactions,
         totalAmount,
@@ -85,6 +117,7 @@ export const getUserProfile = async (req, res, next) => {
       },
     });
   } catch (error) {
-    next(error);
+    console.error("Error in getUserProfile:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };

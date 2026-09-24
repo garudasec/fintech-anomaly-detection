@@ -12,15 +12,11 @@ function transactionToAnomaly(txObj) {
   else if (txObj.status === "completed" || txObj.status === "normal") status = "resolved";
   else if (txObj.status === "flagged" || txObj.status === "anomaly") status = "open";
 
+  // Only return real ML-generated signals. If unsupplied, primarySignal is null.
   const primarySignal =
     txObj.signals && txObj.signals.length > 0
       ? txObj.signals[0]
-      : {
-          kind: "amount_spike",
-          label: "Unusually high transaction amount",
-          weight: 1,
-          detail: "Amount exceeds expected threshold for this account.",
-        };
+      : null;
 
   return {
     anomalyId: `ANM-${txObj.transactionId || txObj._id.toString().substring(18)}`,
@@ -37,7 +33,7 @@ function transactionToAnomaly(txObj) {
  * @desc Get list of anomalies derived from flagged / high-risk transactions
  * @route GET /api/anomalies
  */
-export const getAnomalies = async (req, res, next) => {
+export const getAnomalies = async (req, res) => {
   try {
     const { severity = "all", status = "all", search = "" } = req.query;
 
@@ -80,7 +76,8 @@ export const getAnomalies = async (req, res, next) => {
       data: anomalies,
     });
   } catch (error) {
-    next(error);
+    console.error("Error in getAnomalies:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -88,7 +85,7 @@ export const getAnomalies = async (req, res, next) => {
  * @desc Get top recent un-resolved anomalies
  * @route GET /api/anomalies/recent
  */
-export const getRecentAnomalies = async (req, res, next) => {
+export const getRecentAnomalies = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit, 10) || 6;
 
@@ -114,7 +111,8 @@ export const getRecentAnomalies = async (req, res, next) => {
       data: anomalies,
     });
   } catch (error) {
-    next(error);
+    console.error("Error in getRecentAnomalies:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -122,7 +120,7 @@ export const getRecentAnomalies = async (req, res, next) => {
  * @desc Update investigation status of an anomaly (updates underlying transaction)
  * @route PATCH /api/anomalies/:id/status
  */
-export const updateAnomalyStatus = async (req, res, next) => {
+export const updateAnomalyStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -135,7 +133,6 @@ export const updateAnomalyStatus = async (req, res, next) => {
       });
     }
 
-    // Extract txId from ANM-TXN-... or use raw id
     let txId = id.startsWith("ANM-") ? id.substring(4) : id;
 
     let tx = await Transaction.findOne({ transactionId: txId });
@@ -147,7 +144,6 @@ export const updateAnomalyStatus = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Anomaly transaction not found" });
     }
 
-    // Map anomaly status to transaction status
     if (status === "open") tx.status = "flagged";
     else if (status === "under_review") tx.status = "under_review";
     else if (status === "escalated") tx.status = "blocked";
@@ -163,6 +159,7 @@ export const updateAnomalyStatus = async (req, res, next) => {
       data: updatedAnomaly,
     });
   } catch (error) {
-    next(error);
+    console.error("Error in updateAnomalyStatus:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
