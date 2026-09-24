@@ -5,6 +5,7 @@ import {
   getTransactionById,
   getRelatedTransactions,
   submitTransactionAnalysis,
+  analyzeTransactionById,
 } from "../controllers/transaction.controller.js";
 
 const router = express.Router();
@@ -14,5 +15,6 @@ router.get("/", getTransactions);
 router.get("/:id", getTransactionById);
 router.get("/:id/related", getRelatedTransactions);
 router.post("/:id/analysis", submitTransactionAnalysis);
+router.post("/:id/analyze", analyzeTransactionById);
 
 export default router;

@@ -1,4 +1,5 @@
 import Transaction from "../models/transaction.model.js";
+import { analyzeTransaction } from "../services/ml.service.js";
 
 /**
  * @desc Create a new financial transaction
@@ -259,6 +260,87 @@ export const getRelatedTransactions = async (req, res) => {
   } catch (error) {
     console.error("Error in getRelatedTransactions:", error.stack || error);
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * @desc Trigger ML analysis for a transaction by ID
+ * @route POST /api/transactions/:id/analyze
+ */
+export const analyzeTransactionById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    let tx = await Transaction.findOne({ transactionId: id });
+    if (!tx && id.match(/^[0-9a-fA-F]{24}$/)) {
+      tx = await Transaction.findById(id);
+    }
+
+    if (!tx) {
+      return res.status(404).json({ success: false, message: "Transaction not found" });
+    }
+
+    // Fetch historical transactions for the same user, excluding current transaction, sorted chronologically
+    const historyRaw = await Transaction.find({
+      userId: tx.userId,
+      _id: { $ne: tx._id },
+    }).sort({ transactionTime: 1 });
+
+    const cleanTargetTx = typeof tx.toCleanObject === "function" ? tx.toCleanObject() : tx.toObject();
+    const cleanHistory = historyRaw.map((h) =>
+      typeof h.toCleanObject === "function" ? h.toCleanObject() : h.toObject()
+    );
+
+    let mlResult;
+    try {
+      mlResult = await analyzeTransaction(cleanTargetTx, cleanHistory);
+    } catch (mlError) {
+      console.error("ML Service call failed in analyzeTransactionById:", mlError.message || mlError);
+      return res.status(502).json({
+        success: false,
+        message: `ML Service Error: ${mlError.message || "Failed to communicate with Python ML Service"}`,
+      });
+    }
+
+    const { anomalyScore, riskLevel, signals } = mlResult || {};
+
+    // Validate ML response structure
+    const validRiskLevels = ["low", "medium", "high", "critical"];
+    if (
+      typeof anomalyScore !== "number" ||
+      anomalyScore < 0 ||
+      anomalyScore > 1 ||
+      !riskLevel ||
+      !validRiskLevels.includes(riskLevel) ||
+      !Array.isArray(signals)
+    ) {
+      return res.status(502).json({
+        success: false,
+        message: "ML Service Error: Received invalid response structure from ML service",
+      });
+    }
+
+    tx.anomalyScore = anomalyScore;
+    tx.riskLevel = riskLevel;
+    tx.signals = signals;
+    tx.analysisState = "analyzed";
+
+    // Auto-flag transaction status if high or critical risk
+    if ((riskLevel === "high" || riskLevel === "critical") && (tx.status === "completed" || tx.status === "normal")) {
+      tx.status = "flagged";
+    }
+
+    await tx.save();
+
+    const cleanData = typeof tx.toCleanObject === "function" ? tx.toCleanObject() : tx.toObject();
+
+    return res.status(200).json({
+      success: true,
+      message: "Transaction analyzed successfully",
+      data: cleanData,
+    });
+  } catch (error) {
+    console.error("Error in analyzeTransactionById:", error.stack || error);
+    return res.status(500).json({ success: false, message: error.message || "Internal Server Error" });
   }
 };
 
